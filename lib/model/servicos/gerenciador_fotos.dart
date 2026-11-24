@@ -22,9 +22,37 @@ class SeletorGaleriaPadrao implements SeletorGaleria {
         maxHeight: 1440,
         imageQuality: 85,
       );
-      return arquivo?.path;
+      if (arquivo == null) return null;
+
+      // No Web ou URLs/dados remotos, retorna o caminho do XFile diretamente
+      if (kIsWeb ||
+          arquivo.path.startsWith('http://') ||
+          arquivo.path.startsWith('https://') ||
+          arquivo.path.startsWith('blob:') ||
+          arquivo.path.startsWith('data:image')) {
+        return arquivo.path;
+      }
+
+      // No ambiente nativo (Android/iOS/Desktop), salva IMEDIATAMENTE na pasta permanente
+      // de documentos do aplicativo para evitar que o arquivo temporário na pasta /cache
+      // seja excluído pelo sistema operacional antes do usuário salvar a receita.
+      final Directory baseDir = await getApplicationDocumentsDirectory();
+      final pastaFotos = Directory(p.join(baseDir.path, 'fotos_receitas'));
+      if (!pastaFotos.existsSync()) {
+        pastaFotos.createSync(recursive: true);
+      }
+
+      final extensao = p.extension(arquivo.path).isNotEmpty
+          ? p.extension(arquivo.path)
+          : '.jpg';
+      final nomeUnico = '${const Uuid().v4()}$extensao';
+      final destinoFinal = File(p.join(pastaFotos.path, nomeUnico));
+
+      // Salva usando XFile.saveTo (garante leitura segura mesmo de cache/content URIs)
+      await arquivo.saveTo(destinoFinal.path);
+      return destinoFinal.path;
     } catch (e) {
-      debugPrint('Erro ao acessar a galeria: $e');
+      debugPrint('Erro ao acessar a galeria e salvar foto: $e');
       return null;
     }
   }
@@ -86,12 +114,34 @@ class GerenciadorFotos {
       return caminhoTemporario;
     }
 
-    final arquivoOrigem = File(caminhoTemporario);
-    if (!arquivoOrigem.existsSync()) {
-      throw FileSystemException('Arquivo de origem não existe', caminhoTemporario);
+    // Se já é um caminho relativo na pasta fotos_receitas, retorna diretamente normalizado
+    if (caminhoTemporario.startsWith('fotos_receitas/') ||
+        caminhoTemporario.startsWith('fotos_receitas\\')) {
+      return caminhoTemporario.replaceAll('\\', '/');
+    }
+
+    // Se o caminho já aponta para um arquivo dentro de fotos_receitas (ex: salvo imediatamente na seleção)
+    if (caminhoTemporario.contains('fotos_receitas')) {
+      final nomeArquivo = p.basename(caminhoTemporario);
+      return 'fotos_receitas/$nomeArquivo';
     }
 
     final pastaDestino = await _obterDiretorioFotos();
+    final arquivoOrigem = File(caminhoTemporario);
+
+    if (!await arquivoOrigem.exists()) {
+      // Se não existe no caminho informado, verifica se já existe na pasta destino pelo nome do arquivo
+      final nome = p.basename(caminhoTemporario);
+      final possivelDestino = File(p.join(pastaDestino.path, nome));
+      if (await possivelDestino.exists()) {
+        return 'fotos_receitas/$nome';
+      }
+      throw FileSystemException(
+        'Arquivo de imagem não encontrado. Por favor, selecione a foto novamente.',
+        caminhoTemporario,
+      );
+    }
+
     final extensao = p.extension(caminhoTemporario).isNotEmpty
         ? p.extension(caminhoTemporario)
         : '.jpg';

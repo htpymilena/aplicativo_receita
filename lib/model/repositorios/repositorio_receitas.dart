@@ -66,6 +66,71 @@ class RepositorioReceitas {
   // Armazenamento em memória para ambiente Web ou execução sem banco SQLite físico
   static final List<ReceitaCompleta> _receitasWeb = [];
 
+  static List<ReceitaCompleta> get receitasWeb {
+    if (kIsWeb && _receitasWeb.isEmpty) {
+      _inicializarReceitaExemploWeb();
+    }
+    return _receitasWeb;
+  }
+
+  static void _inicializarReceitaExemploWeb() {
+    _receitasWeb.add(
+      const ReceitaCompleta(
+        receita: Receita(
+          idReceita: 'rec_panqueca_banana',
+          idAutor: 'usuario-web-provisorio',
+          origem: 'usuario',
+          visibilidade: 'privada',
+          estadoModeracao: 'liberada',
+        ),
+        versao: VersaoReceita(
+          idVersao: 'versao_panqueca_v1',
+          idReceita: 'rec_panqueca_banana',
+          numeroVersao: 1,
+          titulo: 'Panqueca de Banana',
+          categoria: 'Café da manhã',
+        ),
+        itens: [
+          ItemReceitaDetalhado(
+            idItem: 'item_banana_1',
+            idIngrediente: 'ing_banana',
+            nomeIngrediente: 'Banana nanica',
+            ordem: 1,
+            medida: '2 unidades',
+          ),
+          ItemReceitaDetalhado(
+            idItem: 'item_ovo_1',
+            idIngrediente: 'ing_ovo',
+            nomeIngrediente: 'Ovo',
+            ordem: 2,
+            medida: '1 unidade',
+          ),
+          ItemReceitaDetalhado(
+            idItem: 'item_aveia_1',
+            idIngrediente: 'ing_aveia',
+            nomeIngrediente: 'Flocos de aveia',
+            ordem: 3,
+            medida: '2 colheres de sopa',
+          ),
+        ],
+        etapas: [
+          Etapa(
+            idEtapa: 'etapa_panqueca_1',
+            idVersao: 'versao_panqueca_v1',
+            ordem: 1,
+            instrucao: 'Amasse as duas bananas maduras em um prato com um garfo até formar um purê.',
+          ),
+          Etapa(
+            idEtapa: 'etapa_panqueca_2',
+            idVersao: 'versao_panqueca_v1',
+            ordem: 2,
+            instrucao: 'Misture o ovo batido e a aveia. Despeje em uma frigideira untada em fogo baixo e doure os dois lados.',
+          ),
+        ],
+      ),
+    );
+  }
+
   @visibleForTesting
   static void limparMemoriaWeb() => _receitasWeb.clear();
 
@@ -249,7 +314,7 @@ class RepositorioReceitas {
   /// Lista receitas próprias não excluídas do usuário ativo, trazendo a versão mais recente.
   Future<List<ReceitaResumo>> listarReceitasProprias(String idAutor) async {
     if (_usarMemoria) {
-      final filtradas = _receitasWeb
+      final filtradas = receitasWeb
           .where((r) => r.receita.idAutor == idAutor && r.receita.excluidaEm == null)
           .toList();
       filtradas.sort((a, b) =>
@@ -307,7 +372,7 @@ class RepositorioReceitas {
     required String idAutor,
   }) async {
     if (_usarMemoria) {
-      final encontradas = _receitasWeb.where((r) =>
+      final encontradas = receitasWeb.where((r) =>
           r.receita.idReceita == idReceita &&
           r.receita.idAutor == idAutor &&
           r.receita.excluidaEm == null);

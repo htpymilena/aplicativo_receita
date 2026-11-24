@@ -68,7 +68,15 @@ class _FormularioReceitaTelaState extends State<FormularioReceitaTela> {
         _categoriaPersonalizadaController = TextEditingController(text: cat);
       }
       _fotoAtual = edicao.versao.fotoLocal;
-      _urlFotoController = TextEditingController(text: _fotoAtual ?? '');
+      _urlFotoController = TextEditingController(
+        text: (_fotoAtual != null &&
+                (_fotoAtual!.startsWith('http://') ||
+                 _fotoAtual!.startsWith('https://') ||
+                 _fotoAtual!.startsWith('//') ||
+                 _fotoAtual!.startsWith('www.')))
+            ? _fotoAtual
+            : '',
+      );
       for (final item in edicao.itens) {
         _ingredientesControllers.add(TextEditingController(text: item.nomeIngrediente));
         _medidasControllers.add(TextEditingController(text: item.medida));
@@ -140,7 +148,7 @@ class _FormularioReceitaTelaState extends State<FormularioReceitaTela> {
     if (caminho != null && mounted) {
       setState(() {
         _novaFotoCaminho = caminho;
-        _urlFotoController.text = caminho;
+        _urlFotoController.clear();
         _removerFoto = false;
       });
     }

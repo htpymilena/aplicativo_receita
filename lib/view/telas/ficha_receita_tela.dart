@@ -1,19 +1,23 @@
 import 'package:flutter/material.dart';
+import '../../controller/controller_preparo.dart';
 import '../../controller/controller_receitas.dart';
 import '../componentes/botoes.dart';
 import '../componentes/imagem_receita.dart';
 import '../componentes/selo_estado.dart';
 import '../theme/cores.dart';
+import 'checklist_preparo_tela.dart';
 import 'formulario_receita_tela.dart';
 
 class FichaReceitaTela extends StatefulWidget {
   final String idReceita;
   final ControllerReceitas controller;
+  final ControllerPreparo? controllerPreparo;
 
   const FichaReceitaTela({
     super.key,
     required this.idReceita,
     required this.controller,
+    this.controllerPreparo,
   });
 
   @override
@@ -22,10 +26,12 @@ class FichaReceitaTela extends StatefulWidget {
 
 class _FichaReceitaTelaState extends State<FichaReceitaTela> {
   String? _caminhoFotoResolvido;
+  late final ControllerPreparo _controllerPreparo;
 
   @override
   void initState() {
     super.initState();
+    _controllerPreparo = widget.controllerPreparo ?? ControllerPreparo();
     _carregar();
   }
 
@@ -50,6 +56,19 @@ class _FichaReceitaTelaState extends State<FichaReceitaTela> {
           _caminhoFotoResolvido = null;
         });
       }
+    }
+  }
+
+  void _iniciarReceita() async {
+    final prep = await _controllerPreparo.iniciarReceita(widget.idReceita);
+    if (prep != null && mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChecklistPreparoTela(
+            controller: _controllerPreparo,
+          ),
+        ),
+      );
     }
   }
 
@@ -326,10 +345,22 @@ class _FichaReceitaTelaState extends State<FichaReceitaTela> {
                     ),
                   ),
                   const SizedBox(height: 32),
-                  BotaoSecundario(
-                    texto: 'Editar receita',
-                    icone: const Icon(Icons.edit, size: 20),
-                    onPressed: _abrirEdicao,
+                  SizedBox(
+                    width: double.infinity,
+                    child: BotaoPrimario(
+                      texto: 'Iniciar receita',
+                      icone: const Icon(Icons.play_arrow_rounded, size: 24),
+                      onPressed: _controllerPreparo.iniciando ? null : _iniciarReceita,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: BotaoSecundario(
+                      texto: 'Editar receita',
+                      icone: const Icon(Icons.edit, size: 20),
+                      onPressed: _abrirEdicao,
+                    ),
                   ),
                 ],
               ),

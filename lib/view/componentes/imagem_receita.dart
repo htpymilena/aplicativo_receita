@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import '../theme/cores.dart';
 
 /// Componente que renderiza imagens de receitas de forma multiplataforma (Web e Nativo).
@@ -79,6 +81,29 @@ class ImagemReceita extends StatelessWidget {
 
     // 3. Arquivo local no dispositivo nativo (Android, Windows, etc.)
     if (!kIsWeb) {
+      if (caminho.startsWith('fotos_receitas/') || caminho.startsWith('fotos_receitas\\')) {
+        return FutureBuilder<Directory>(
+          future: getApplicationDocumentsDirectory().catchError((_) => Directory('')),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || snapshot.data!.path.isEmpty) {
+              return _construirPlaceholder();
+            }
+            final baseDir = snapshot.data!;
+            final arquivo = File(p.join(baseDir.path, caminho));
+            if (arquivo.existsSync()) {
+              return Image.file(
+                arquivo,
+                width: width,
+                height: height,
+                fit: fit,
+                errorBuilder: (context, error, stackTrace) => _construirPlaceholder(),
+              );
+            }
+            return _construirPlaceholder();
+          },
+        );
+      }
+
       try {
         final arquivo = File(caminho);
         if (arquivo.existsSync()) {
