@@ -4,8 +4,11 @@ import 'package:uuid/uuid.dart';
 
 import '../entidades/entidades.dart';
 import '../servicos/normalizador_ingredientes.dart';
+import '../servicos/quebrador_instrucoes.dart';
 import '../servicos/rascunho_receita.dart';
+import '../servicos/tradutor_themealdb.dart';
 import 'banco_dados.dart';
+import 'repositorio_favoritos.dart';
 
 /// Resumo de receita para exibição em listas.
 class ReceitaResumo {
@@ -13,17 +16,28 @@ class ReceitaResumo {
   final String titulo;
   final String categoria;
   final String? fotoLocal;
+  final String? fotoRemota;
   final int numeroVersao;
   final DateTime? excluidaEm;
+  final DateTime? salvoEm;
+  final String origem;
+  final String? idThemealdb;
 
   const ReceitaResumo({
     required this.idReceita,
     required this.titulo,
     required this.categoria,
     this.fotoLocal,
+    this.fotoRemota,
     required this.numeroVersao,
     this.excluidaEm,
+    this.salvoEm,
+    this.origem = 'usuario',
+    this.idThemealdb,
   });
+
+  /// Caminho local ou URL remota da foto para exibição.
+  String? get foto => fotoLocal ?? fotoRemota;
 }
 
 /// Item de receita detalhado com nome de exibição do ingrediente.
@@ -65,6 +79,18 @@ class RepositorioReceitas {
 
   // Armazenamento em memória para ambiente Web ou execução sem banco SQLite físico
   static final List<ReceitaCompleta> _receitasWeb = [];
+  static final List<Map<String, dynamic>> _receitasExternasUsuarioWeb = [];
+
+  @visibleForTesting
+  static void limparMemoriaReceitasExternas() {
+    _receitasExternasUsuarioWeb.clear();
+  }
+
+  static bool receitaExternaAssociadaAoUsuario(String idUsuario, String idReceita) {
+    return _receitasExternasUsuarioWeb.any(
+      (m) => m['id_usuario'] == idUsuario && m['id_receita'] == idReceita,
+    );
+  }
 
   static List<ReceitaCompleta> get receitasWeb {
     if (kIsWeb && _receitasWeb.isEmpty) {
@@ -366,26 +392,38 @@ class RepositorioReceitas {
     }).toList();
   }
 
-  /// Obtém a versão mais recente de uma receita própria, com seus itens e etapas ordenados.
+  /// Obtém a versão mais recente de uma receita (própria do autor ou externa associada ao usuário).
   Future<ReceitaCompleta?> obterReceitaPorId({
     required String idReceita,
-    required String idAutor,
+    String? idAutor,
+    String? idUsuario,
   }) async {
+    final usuarioId = idUsuario ?? idAutor ?? '';
+
     if (_usarMemoria) {
       final encontradas = receitasWeb.where((r) =>
           r.receita.idReceita == idReceita &&
-          r.receita.idAutor == idAutor &&
-          r.receita.excluidaEm == null);
+          r.receita.excluidaEm == null &&
+          ((r.receita.origem == 'usuario' && r.receita.idAutor == usuarioId) ||
+              (r.receita.origem == 'themealdb' &&
+                  receitaExternaAssociadaAoUsuario(usuarioId, idReceita))));
       if (encontradas.isEmpty) return null;
       return encontradas.first;
     }
 
-    final receitas = await _db.query(
-      'receita',
-      where: 'id_receita = ? AND id_autor = ? AND excluida_em IS NULL',
-      whereArgs: [idReceita, idAutor],
-      limit: 1,
-    );
+    final receitas = await _db.rawQuery('''
+      SELECT r.* FROM receita r
+      WHERE r.id_receita = ? AND r.excluida_em IS NULL
+        AND (
+          (r.origem = 'usuario' AND r.id_autor = ?)
+          OR
+          (r.origem = 'themealdb' AND EXISTS (
+            SELECT 1 FROM receita_externa_usuario reu
+            WHERE reu.id_receita = r.id_receita AND reu.id_usuario = ?
+          ))
+        )
+      LIMIT 1;
+    ''', [idReceita, usuarioId, usuarioId]);
     if (receitas.isEmpty) return null;
 
     final receita = Receita.fromMap(receitas.first);
@@ -439,6 +477,515 @@ class RepositorioReceitas {
       itens: itens,
       etapas: etapas,
     );
+  }
+
+  /// Salva uma cópia local de receita externa da TheMealDB associada ao usuário ativo.
+  Future<ReceitaCompleta> salvarCopiaExterna({
+    required String idUsuario,
+    required FichaTheMealDb ficha,
+  }) async {
+    const uuid = Uuid();
+    final agora = DateTime.now().toUtc();
+
+    if (_usarMemoria) {
+      final index = _receitasWeb.indexWhere(
+        (r) => r.receita.origem == 'themealdb' && r.receita.idThemealdb == ficha.idMeal,
+      );
+
+      final ReceitaCompleta completa;
+      if (index == -1) {
+        final idReceita = 'rec_ext_${ficha.idMeal}';
+        final idVersao = 'ver_ext_${ficha.idMeal}_v1';
+        final rec = Receita(
+          idReceita: idReceita,
+          idAutor: null,
+          origem: 'themealdb',
+          idThemealdb: ficha.idMeal,
+          visibilidade: 'publica',
+          estadoModeracao: 'liberada',
+        );
+        final versao = VersaoReceita(
+          idVersao: idVersao,
+          idReceita: idReceita,
+          numeroVersao: 1,
+          titulo: ficha.strMeal,
+          categoria: ficha.categoria,
+          fotoRemota: ficha.fotoRemota,
+        );
+        final itens = ficha.ingredientes
+            .map((ing) => ItemReceitaDetalhado(
+                  idItem: uuid.v4(),
+                  idIngrediente: uuid.v4(),
+                  nomeIngrediente: ing.nome,
+                  ordem: ing.ordem,
+                  medida: ing.medida,
+                ))
+            .toList();
+        final listaEtapas = QuebradorInstrucoes.dividirEmEtapas(ficha.instrucoes);
+        final etapas = <Etapa>[];
+        for (int i = 0; i < listaEtapas.length; i++) {
+          etapas.add(
+            Etapa(
+              idEtapa: uuid.v4(),
+              idVersao: idVersao,
+              ordem: i + 1,
+              instrucao: listaEtapas[i],
+            ),
+          );
+        }
+        completa = ReceitaCompleta(
+          receita: rec,
+          versao: versao,
+          itens: itens,
+          etapas: etapas,
+        );
+        _receitasWeb.add(completa);
+      } else {
+        final existente = _receitasWeb[index];
+        final listaEtapas = QuebradorInstrucoes.dividirEmEtapas(ficha.instrucoes);
+        bool conteudoMudou = false;
+        if (existente.versao.titulo != ficha.strMeal ||
+            existente.versao.categoria != ficha.categoria ||
+            existente.versao.fotoRemota != ficha.fotoRemota ||
+            existente.etapas.length != listaEtapas.length ||
+            existente.itens.length != ficha.ingredientes.length) {
+          conteudoMudou = true;
+        } else {
+          for (int i = 0; i < listaEtapas.length; i++) {
+            if (existente.etapas[i].instrucao != listaEtapas[i]) {
+              conteudoMudou = true;
+              break;
+            }
+          }
+          if (!conteudoMudou) {
+            for (int i = 0; i < existente.itens.length; i++) {
+              if (existente.itens[i].nomeIngrediente.toLowerCase() !=
+                      ficha.ingredientes[i].nome.toLowerCase() ||
+                  existente.itens[i].medida != ficha.ingredientes[i].medida) {
+                conteudoMudou = true;
+                break;
+              }
+            }
+          }
+        }
+
+        if (conteudoMudou) {
+          final novaVersaoNum = existente.versao.numeroVersao + 1;
+          final idNovaVersao = uuid.v4();
+          final novaVersao = VersaoReceita(
+            idVersao: idNovaVersao,
+            idReceita: existente.receita.idReceita,
+            numeroVersao: novaVersaoNum,
+            titulo: ficha.strMeal,
+            categoria: ficha.categoria,
+            fotoRemota: ficha.fotoRemota,
+          );
+          final novosItens = ficha.ingredientes
+              .map((ing) => ItemReceitaDetalhado(
+                    idItem: uuid.v4(),
+                    idIngrediente: uuid.v4(),
+                    nomeIngrediente: ing.nome,
+                    ordem: ing.ordem,
+                    medida: ing.medida,
+                  ))
+              .toList();
+          final novasEtapas = <Etapa>[];
+          for (int i = 0; i < listaEtapas.length; i++) {
+            novasEtapas.add(
+              Etapa(
+                idEtapa: uuid.v4(),
+                idVersao: idNovaVersao,
+                ordem: i + 1,
+                instrucao: listaEtapas[i],
+              ),
+            );
+          }
+          completa = ReceitaCompleta(
+            receita: existente.receita,
+            versao: novaVersao,
+            itens: novosItens,
+            etapas: novasEtapas,
+          );
+          _receitasWeb[index] = completa;
+        } else {
+          completa = existente;
+        }
+      }
+
+      final jaAssociado = _receitasExternasUsuarioWeb.any(
+        (m) =>
+            m['id_usuario'] == idUsuario &&
+            m['id_receita'] == completa.receita.idReceita,
+      );
+      if (!jaAssociado) {
+        _receitasExternasUsuarioWeb.add({
+          'id_usuario': idUsuario,
+          'id_receita': completa.receita.idReceita,
+          'salvo_em': agora,
+        });
+      }
+      return completa;
+    }
+
+    return await _db.transaction<ReceitaCompleta>((txn) async {
+      final recRows = await txn.query(
+        'receita',
+        where: "origem = 'themealdb' AND id_themealdb = ?",
+        whereArgs: [ficha.idMeal],
+        limit: 1,
+      );
+
+      final String idReceita;
+      final VersaoReceita versaoAtiva;
+      final List<ItemReceitaDetalhado> itensAtivos;
+      final List<Etapa> etapasAtivas;
+      final Receita receitaEntity;
+
+      if (recRows.isEmpty) {
+        idReceita = uuid.v4();
+        await txn.insert('receita', {
+          'id_receita': idReceita,
+          'id_autor': null,
+          'origem': 'themealdb',
+          'id_themealdb': ficha.idMeal,
+          'visibilidade': 'publica',
+          'estado_moderacao': 'liberada',
+          'excluida_em': null,
+        });
+
+        receitaEntity = Receita(
+          idReceita: idReceita,
+          idAutor: null,
+          origem: 'themealdb',
+          idThemealdb: ficha.idMeal,
+          visibilidade: 'publica',
+          estadoModeracao: 'liberada',
+        );
+
+        final idVersao = uuid.v4();
+        await txn.insert('versao_receita', {
+          'id_versao': idVersao,
+          'id_receita': idReceita,
+          'numero_versao': 1,
+          'titulo': ficha.strMeal,
+          'categoria': ficha.categoria,
+          'foto_local': null,
+          'foto_remota': ficha.fotoRemota,
+        });
+
+        versaoAtiva = VersaoReceita(
+          idVersao: idVersao,
+          idReceita: idReceita,
+          numeroVersao: 1,
+          titulo: ficha.strMeal,
+          categoria: ficha.categoria,
+          fotoRemota: ficha.fotoRemota,
+        );
+
+        itensAtivos = [];
+        for (final item in ficha.ingredientes) {
+          final normalizado = NormalizadorIngredientes.normalizar(item.nome);
+          final existentes = await txn.query(
+            'ingrediente',
+            columns: ['id_ingrediente'],
+            where: 'nome_normalizado = ?',
+            whereArgs: [normalizado],
+            limit: 1,
+          );
+          final String idIngrediente;
+          if (existentes.isNotEmpty) {
+            idIngrediente = existentes.first['id_ingrediente'] as String;
+          } else {
+            idIngrediente = uuid.v4();
+            await txn.insert('ingrediente', {
+              'id_ingrediente': idIngrediente,
+              'nome': item.nome,
+              'nome_normalizado': normalizado,
+            });
+          }
+          final idItem = uuid.v4();
+          await txn.insert('item_receita', {
+            'id_item': idItem,
+            'id_versao': idVersao,
+            'id_ingrediente': idIngrediente,
+            'ordem': item.ordem,
+            'medida': item.medida,
+          });
+          itensAtivos.add(ItemReceitaDetalhado(
+            idItem: idItem,
+            idIngrediente: idIngrediente,
+            nomeIngrediente: item.nome,
+            ordem: item.ordem,
+            medida: item.medida,
+          ));
+        }
+
+        final listaEtapas = QuebradorInstrucoes.dividirEmEtapas(ficha.instrucoes);
+        etapasAtivas = [];
+        for (int i = 0; i < listaEtapas.length; i++) {
+          final idEtapa = uuid.v4();
+          final ordem = i + 1;
+          final instrucao = listaEtapas[i];
+          await txn.insert('etapa', {
+            'id_etapa': idEtapa,
+            'id_versao': idVersao,
+            'ordem': ordem,
+            'instrucao': instrucao,
+          });
+          etapasAtivas.add(Etapa(
+            idEtapa: idEtapa,
+            idVersao: idVersao,
+            ordem: ordem,
+            instrucao: instrucao,
+          ));
+        }
+      } else {
+        idReceita = recRows.first['id_receita'] as String;
+        receitaEntity = Receita.fromMap(recRows.first);
+
+        final versoesRows = await txn.query(
+          'versao_receita',
+          where: 'id_receita = ?',
+          whereArgs: [idReceita],
+          orderBy: 'numero_versao DESC',
+          limit: 1,
+        );
+        final versaoAtual = VersaoReceita.fromMap(versoesRows.first);
+
+        final etapasRows = await txn.query(
+          'etapa',
+          where: 'id_versao = ?',
+          whereArgs: [versaoAtual.idVersao],
+          orderBy: 'ordem ASC',
+        );
+        final etapasExistentes = etapasRows.map((e) => Etapa.fromMap(e)).toList();
+
+        final itensRaw = await txn.rawQuery('''
+          SELECT i.id_item, i.id_ingrediente, i.ordem, i.medida, ing.nome AS nome_ingrediente
+          FROM item_receita i
+          JOIN ingrediente ing ON i.id_ingrediente = ing.id_ingrediente
+          WHERE i.id_versao = ?
+          ORDER BY i.ordem ASC
+        ''', [versaoAtual.idVersao]);
+        final itensExistentes = itensRaw
+            .map((r) => ItemReceitaDetalhado(
+                  idItem: r['id_item'] as String,
+                  idIngrediente: r['id_ingrediente'] as String,
+                  nomeIngrediente: r['nome_ingrediente'] as String,
+                  ordem: r['ordem'] as int,
+                  medida: r['medida'] as String,
+                ))
+            .toList();
+
+        final listaEtapas = QuebradorInstrucoes.dividirEmEtapas(ficha.instrucoes);
+        bool mudou = false;
+        if (versaoAtual.titulo != ficha.strMeal ||
+            versaoAtual.categoria != ficha.categoria ||
+            versaoAtual.fotoRemota != ficha.fotoRemota ||
+            etapasExistentes.length != listaEtapas.length ||
+            itensExistentes.length != ficha.ingredientes.length) {
+          mudou = true;
+        } else {
+          for (int i = 0; i < listaEtapas.length; i++) {
+            if (etapasExistentes[i].instrucao != listaEtapas[i]) {
+              mudou = true;
+              break;
+            }
+          }
+          if (!mudou) {
+            for (int i = 0; i < itensExistentes.length; i++) {
+              if (itensExistentes[i].nomeIngrediente.toLowerCase() !=
+                      ficha.ingredientes[i].nome.toLowerCase() ||
+                  itensExistentes[i].medida != ficha.ingredientes[i].medida) {
+                mudou = true;
+                break;
+              }
+            }
+          }
+        }
+
+        if (mudou) {
+          final novoNumero = versaoAtual.numeroVersao + 1;
+          final idNovaVersao = uuid.v4();
+          await txn.insert('versao_receita', {
+            'id_versao': idNovaVersao,
+            'id_receita': idReceita,
+            'numero_versao': novoNumero,
+            'titulo': ficha.strMeal,
+            'categoria': ficha.categoria,
+            'foto_local': null,
+            'foto_remota': ficha.fotoRemota,
+          });
+          versaoAtiva = VersaoReceita(
+            idVersao: idNovaVersao,
+            idReceita: idReceita,
+            numeroVersao: novoNumero,
+            titulo: ficha.strMeal,
+            categoria: ficha.categoria,
+            fotoRemota: ficha.fotoRemota,
+          );
+
+          itensAtivos = [];
+          for (final item in ficha.ingredientes) {
+            final normalizado = NormalizadorIngredientes.normalizar(item.nome);
+            final existentes = await txn.query(
+              'ingrediente',
+              columns: ['id_ingrediente'],
+              where: 'nome_normalizado = ?',
+              whereArgs: [normalizado],
+              limit: 1,
+            );
+            final String idIngrediente;
+            if (existentes.isNotEmpty) {
+              idIngrediente = existentes.first['id_ingrediente'] as String;
+            } else {
+              idIngrediente = uuid.v4();
+              await txn.insert('ingrediente', {
+                'id_ingrediente': idIngrediente,
+                'nome': item.nome,
+                'nome_normalizado': normalizado,
+              });
+            }
+            final idItem = uuid.v4();
+            await txn.insert('item_receita', {
+              'id_item': idItem,
+              'id_versao': idNovaVersao,
+              'id_ingrediente': idIngrediente,
+              'ordem': item.ordem,
+              'medida': item.medida,
+            });
+            itensAtivos.add(ItemReceitaDetalhado(
+              idItem: idItem,
+              idIngrediente: idIngrediente,
+              nomeIngrediente: item.nome,
+              ordem: item.ordem,
+              medida: item.medida,
+            ));
+          }
+
+          etapasAtivas = [];
+          for (int i = 0; i < listaEtapas.length; i++) {
+            final idEtapa = uuid.v4();
+            final ordem = i + 1;
+            final instrucao = listaEtapas[i];
+            await txn.insert('etapa', {
+              'id_etapa': idEtapa,
+              'id_versao': idNovaVersao,
+              'ordem': ordem,
+              'instrucao': instrucao,
+            });
+            etapasAtivas.add(Etapa(
+              idEtapa: idEtapa,
+              idVersao: idNovaVersao,
+              ordem: ordem,
+              instrucao: instrucao,
+            ));
+          }
+        } else {
+          versaoAtiva = versaoAtual;
+          itensAtivos = itensExistentes;
+          etapasAtivas = etapasExistentes;
+        }
+      }
+
+      await txn.insert(
+        'receita_externa_usuario',
+        {
+          'id_usuario': idUsuario,
+          'id_receita': idReceita,
+          'salvo_em': agora.toIso8601String(),
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+
+      return ReceitaCompleta(
+        receita: receitaEntity,
+        versao: versaoAtiva,
+        itens: itensAtivos,
+        etapas: etapasAtivas,
+      );
+    });
+  }
+
+  /// Lista receitas externas salvas/copiadas pelo usuário ativo.
+  Future<List<ReceitaResumo>> listarReceitasExternasSalvas(String idUsuario) async {
+    if (_usarMemoria) {
+      final associacoes = _receitasExternasUsuarioWeb
+          .where((m) => m['id_usuario'] == idUsuario)
+          .toList();
+
+      final lista = <ReceitaResumo>[];
+      for (final assoc in associacoes) {
+        final rec = _receitasWeb
+            .where((r) =>
+                r.receita.idReceita == assoc['id_receita'] &&
+                r.receita.excluidaEm == null)
+            .firstOrNull;
+        if (rec != null) {
+          lista.add(ReceitaResumo(
+            idReceita: rec.receita.idReceita,
+            titulo: rec.versao.titulo,
+            categoria: rec.versao.categoria,
+            fotoLocal: rec.versao.fotoLocal,
+            fotoRemota: rec.versao.fotoRemota,
+            numeroVersao: rec.versao.numeroVersao,
+            origem: rec.receita.origem,
+            idThemealdb: rec.receita.idThemealdb,
+            salvoEm: assoc['salvo_em'] as DateTime?,
+          ));
+        }
+      }
+
+      lista.sort((a, b) {
+        final comp = (b.salvoEm ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(a.salvoEm ?? DateTime.fromMillisecondsSinceEpoch(0));
+        if (comp != 0) return comp;
+        return a.idReceita.compareTo(b.idReceita);
+      });
+
+      return lista;
+    }
+
+    final resultados = await _db.rawQuery('''
+      SELECT 
+        r.id_receita,
+        r.id_themealdb,
+        r.origem,
+        r.excluida_em,
+        reu.salvo_em,
+        v.titulo,
+        v.categoria,
+        v.foto_local,
+        v.foto_remota,
+        v.numero_versao
+      FROM receita_externa_usuario reu
+      JOIN receita r ON reu.id_receita = r.id_receita
+      JOIN versao_receita v ON r.id_receita = v.id_receita
+      WHERE reu.id_usuario = ?
+        AND r.excluida_em IS NULL
+        AND v.numero_versao = (
+          SELECT MAX(v2.numero_versao)
+          FROM versao_receita v2
+          WHERE v2.id_receita = r.id_receita
+        )
+      ORDER BY reu.salvo_em DESC, r.id_receita ASC;
+    ''', [idUsuario]);
+
+    return resultados.map((row) {
+      return ReceitaResumo(
+        idReceita: row['id_receita'] as String,
+        titulo: row['titulo'] as String,
+        categoria: row['categoria'] as String,
+        fotoLocal: row['foto_local'] as String?,
+        fotoRemota: row['foto_remota'] as String?,
+        numeroVersao: row['numero_versao'] as int,
+        origem: (row['origem'] as String?) ?? 'themealdb',
+        idThemealdb: row['id_themealdb'] as String?,
+        salvoEm: row['salvo_em'] != null
+            ? DateTime.parse(row['salvo_em'] as String).toUtc()
+            : null,
+      );
+    }).toList();
   }
 
   /// Cria uma nova versão da receita, preservando integralmente a versão anterior.
@@ -612,6 +1159,7 @@ class RepositorioReceitas {
   }
 
   /// Exclui logicamente a receita preenchendo excluida_em, sem deletar registros físicos.
+  /// Remove vínculos de favorito na mesma transação/operação para garantir integridade.
   Future<bool> excluirReceitaLogica({
     required String idReceita,
     required String idAutor,
@@ -638,16 +1186,27 @@ class RepositorioReceitas {
         itens: antiga.itens,
         etapas: antiga.etapas,
       );
+      RepositorioFavoritos.removerFavoritoEmMemoria(idReceita);
       return true;
     }
 
     final agora = DateTime.now().toUtc().toIso8601String();
-    final linhasAfetadas = await _db.update(
-      'receita',
-      {'excluida_em': agora},
-      where: 'id_receita = ? AND id_autor = ? AND excluida_em IS NULL',
-      whereArgs: [idReceita, idAutor],
-    );
-    return linhasAfetadas > 0;
+    return await _db.transaction<bool>((txn) async {
+      final linhasAfetadas = await txn.update(
+        'receita',
+        {'excluida_em': agora},
+        where: 'id_receita = ? AND id_autor = ? AND excluida_em IS NULL',
+        whereArgs: [idReceita, idAutor],
+      );
+      if (linhasAfetadas > 0) {
+        await txn.delete(
+          'favorito',
+          where: 'id_receita = ?',
+          whereArgs: [idReceita],
+        );
+        return true;
+      }
+      return false;
+    });
   }
 }

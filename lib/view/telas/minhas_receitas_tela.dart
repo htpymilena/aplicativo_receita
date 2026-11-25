@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../controller/controller_favoritos.dart';
 import '../../controller/controller_receitas.dart';
 import '../componentes/botoes.dart';
 import '../componentes/cartao_receita.dart';
@@ -9,10 +10,12 @@ import 'formulario_receita_tela.dart';
 
 class MinhasReceitasTela extends StatefulWidget {
   final ControllerReceitas? controller;
+  final ControllerFavoritos? controllerFavoritos;
 
   const MinhasReceitasTela({
     super.key,
     this.controller,
+    this.controllerFavoritos,
   });
 
   @override
@@ -21,12 +24,15 @@ class MinhasReceitasTela extends StatefulWidget {
 
 class _MinhasReceitasTelaState extends State<MinhasReceitasTela> {
   late ControllerReceitas _controller;
+  late ControllerFavoritos _controllerFavoritos;
 
   @override
   void initState() {
     super.initState();
     _controller = widget.controller ?? ControllerReceitas();
+    _controllerFavoritos = widget.controllerFavoritos ?? ControllerFavoritos();
     _controller.carregarMinhasReceitas();
+    _controllerFavoritos.carregarFavoritos();
   }
 
   void _abrirFormularioNovaReceita() async {
@@ -37,6 +43,7 @@ class _MinhasReceitasTelaState extends State<MinhasReceitasTela> {
     );
     if (criada == true) {
       _controller.carregarMinhasReceitas();
+      _controllerFavoritos.carregarFavoritos();
     }
   }
 
@@ -46,10 +53,12 @@ class _MinhasReceitasTelaState extends State<MinhasReceitasTela> {
         builder: (_) => FichaReceitaTela(
           idReceita: idReceita,
           controller: _controller,
+          controllerFavoritos: _controllerFavoritos,
         ),
       ),
     );
     _controller.carregarMinhasReceitas();
+    _controllerFavoritos.carregarFavoritos();
   }
 
   @override
@@ -67,7 +76,7 @@ class _MinhasReceitasTelaState extends State<MinhasReceitasTela> {
       ),
       body: SafeArea(
         child: ListenableBuilder(
-          listenable: _controller,
+          listenable: Listenable.merge([_controller, _controllerFavoritos]),
           builder: (context, _) {
             if (_controller.carregando && _controller.receitas.isEmpty) {
               return const Padding(
@@ -90,7 +99,12 @@ class _MinhasReceitasTelaState extends State<MinhasReceitasTela> {
             }
 
             return RefreshIndicator(
-              onRefresh: _controller.carregarMinhasReceitas,
+              onRefresh: () async {
+                await Future.wait([
+                  _controller.carregarMinhasReceitas(),
+                  _controllerFavoritos.carregarFavoritos(),
+                ]);
+              },
               child: ListView.builder(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 itemCount: _controller.receitas.length,
@@ -100,6 +114,8 @@ class _MinhasReceitasTelaState extends State<MinhasReceitasTela> {
                     titulo: receita.titulo,
                     categoria: 'Versão ${receita.numeroVersao} • ${receita.categoria}',
                     foto: receita.fotoLocal,
+                    ehFavorito: _controllerFavoritos.isFavorito(receita.idReceita),
+                    onFavoritoTap: () => _controllerFavoritos.alternarFavorito(receita.idReceita),
                     onTap: () => _abrirFichaReceita(receita.idReceita),
                   );
                 },

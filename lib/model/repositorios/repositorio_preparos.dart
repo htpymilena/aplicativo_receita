@@ -69,6 +69,7 @@ class PreparoResumo {
   final String idVersao;
   final String tituloReceita;
   final String? fotoLocal;
+  final String? fotoRemota;
   final DateTime iniciadoEm;
   final DateTime? concluidoEm;
   final int ordemEtapaAtual;
@@ -82,6 +83,7 @@ class PreparoResumo {
     required this.idVersao,
     required this.tituloReceita,
     this.fotoLocal,
+    this.fotoRemota,
     required this.iniciadoEm,
     this.concluidoEm,
     required this.ordemEtapaAtual,
@@ -89,6 +91,9 @@ class PreparoResumo {
     this.estrelas,
     this.receitaExcluida = false,
   });
+
+  /// Caminho local ou URL remota da foto para exibição.
+  String? get foto => fotoLocal ?? fotoRemota;
 
   bool get emAndamento => concluidoEm == null;
 }
@@ -143,12 +148,21 @@ class RepositorioPreparos {
     }
 
     return await _db.transaction<PreparoDetalhado>((txn) async {
-      // 1. Busca a receita e valida autoria e disponibilidade
-      final receitasRows = await txn.query(
-        'receita',
-        where: 'id_receita = ? AND id_autor = ? AND excluida_em IS NULL',
-        whereArgs: [idReceita, idUsuario],
-      );
+      // 1. Busca a receita e valida autoria ou associação de cópia externa e disponibilidade
+      final receitasRows = await txn.rawQuery('''
+        SELECT r.* 
+        FROM receita r
+        LEFT JOIN receita_externa_usuario reu 
+          ON r.id_receita = reu.id_receita AND reu.id_usuario = ?
+        WHERE r.id_receita = ?
+          AND r.excluida_em IS NULL
+          AND (
+            (r.origem = 'usuario' AND r.id_autor = ?)
+            OR (r.origem = 'themealdb' AND reu.id_usuario IS NOT NULL)
+          )
+        LIMIT 1
+      ''', [idUsuario, idReceita, idUsuario]);
+
       if (receitasRows.isEmpty) {
         throw StateError('Receita não encontrada, excluída ou não pertence ao usuário.');
       }
@@ -473,7 +487,7 @@ class RepositorioPreparos {
 
     final rows = await _db.rawQuery('''
       SELECT p.id_preparo, p.id_usuario, p.id_versao, p.iniciado_em, p.concluido_em, p.ordem_etapa_atual,
-             v.id_receita, v.titulo as titulo_receita, v.foto_local,
+             v.id_receita, v.titulo as titulo_receita, v.foto_local, v.foto_remota,
              r.excluida_em,
              (SELECT COUNT(*) FROM etapa e WHERE e.id_versao = p.id_versao) as total_etapas,
              a.estrelas
@@ -492,6 +506,7 @@ class RepositorioPreparos {
         idVersao: r['id_versao'] as String,
         tituloReceita: r['titulo_receita'] as String,
         fotoLocal: r['foto_local'] as String?,
+        fotoRemota: r['foto_remota'] as String?,
         iniciadoEm: DateTime.parse(r['iniciado_em'] as String).toUtc(),
         concluidoEm: null,
         ordemEtapaAtual: (r['ordem_etapa_atual'] as int?) ?? 1,
@@ -512,7 +527,7 @@ class RepositorioPreparos {
 
     final rows = await _db.rawQuery('''
       SELECT p.id_preparo, p.id_usuario, p.id_versao, p.iniciado_em, p.concluido_em, p.ordem_etapa_atual,
-             v.id_receita, v.titulo as titulo_receita, v.foto_local,
+             v.id_receita, v.titulo as titulo_receita, v.foto_local, v.foto_remota,
              r.excluida_em,
              (SELECT COUNT(*) FROM etapa e WHERE e.id_versao = p.id_versao) as total_etapas,
              a.estrelas
@@ -531,6 +546,7 @@ class RepositorioPreparos {
         idVersao: r['id_versao'] as String,
         tituloReceita: r['titulo_receita'] as String,
         fotoLocal: r['foto_local'] as String?,
+        fotoRemota: r['foto_remota'] as String?,
         iniciadoEm: DateTime.parse(r['iniciado_em'] as String).toUtc(),
         concluidoEm: DateTime.parse(r['concluido_em'] as String).toUtc(),
         ordemEtapaAtual: (r['ordem_etapa_atual'] as int?) ?? 1,
@@ -613,6 +629,19 @@ class RepositorioPreparos {
     final rec = RepositorioReceitas.receitasWeb.where(
       (r) => r.receita.idReceita == idReceita && r.receita.excluidaEm == null,
     ).firstOrNull;
+
+    if (rec != null) {
+      final ehAutorProprio =
+          rec.receita.origem == 'usuario' && rec.receita.idAutor == idUsuario;
+      final ehExternaAssociada = rec.receita.origem == 'themealdb' &&
+          RepositorioReceitas.receitaExternaAssociadaAoUsuario(
+              idUsuario, idReceita);
+      if (!ehAutorProprio && !ehExternaAssociada) {
+        throw StateError(
+          'Receita não encontrada, excluída ou não pertence ao usuário.',
+        );
+      }
+    }
 
     final versao = rec?.versao ?? VersaoReceita(
       idVersao: 'versao_mem_$idReceita',
@@ -819,6 +848,7 @@ class RepositorioPreparos {
             idVersao: p.idVersao,
             tituloReceita: rec?.versao.titulo ?? 'Receita em Memória',
             fotoLocal: rec?.versao.fotoLocal,
+            fotoRemota: rec?.versao.fotoRemota,
             iniciadoEm: p.iniciadoEm,
             concluidoEm: null,
             ordemEtapaAtual: p.ordemEtapaAtual,
@@ -843,6 +873,7 @@ class RepositorioPreparos {
             idVersao: p.idVersao,
             tituloReceita: rec?.versao.titulo ?? 'Receita em Memória',
             fotoLocal: rec?.versao.fotoLocal,
+            fotoRemota: rec?.versao.fotoRemota,
             iniciadoEm: p.iniciadoEm,
             concluidoEm: p.concluidoEm,
             ordemEtapaAtual: p.ordemEtapaAtual,

@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import '../../controller/controller_favoritos.dart';
 import '../../controller/controller_preparo.dart';
 import '../../controller/controller_receitas.dart';
+import '../../model/entidades/entidades.dart';
+import '../../model/repositorios/repositorio_receitas.dart';
+import '../../model/servicos/quebrador_instrucoes.dart';
+import '../../model/servicos/servico_traducao.dart';
 import '../componentes/botoes.dart';
 import '../componentes/imagem_receita.dart';
 import '../componentes/selo_estado.dart';
@@ -12,12 +17,14 @@ class FichaReceitaTela extends StatefulWidget {
   final String idReceita;
   final ControllerReceitas controller;
   final ControllerPreparo? controllerPreparo;
+  final ControllerFavoritos? controllerFavoritos;
 
   const FichaReceitaTela({
     super.key,
     required this.idReceita,
     required this.controller,
     this.controllerPreparo,
+    this.controllerFavoritos,
   });
 
   @override
@@ -26,12 +33,20 @@ class FichaReceitaTela extends StatefulWidget {
 
 class _FichaReceitaTelaState extends State<FichaReceitaTela> {
   String? _caminhoFotoResolvido;
+  List<Etapa>? _etapasTraduzidasDinamicas;
   late final ControllerPreparo _controllerPreparo;
+  late final ControllerFavoritos _controllerFavoritos;
 
   @override
   void initState() {
     super.initState();
     _controllerPreparo = widget.controllerPreparo ?? ControllerPreparo();
+    _controllerFavoritos = widget.controllerFavoritos ?? ControllerFavoritos();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _controllerFavoritos.carregarFavoritos();
+      }
+    });
     _carregar();
   }
 
@@ -50,12 +65,55 @@ class _FichaReceitaTelaState extends State<FichaReceitaTela> {
           _caminhoFotoResolvido = path;
         });
       }
+    } else if (detalhes?.versao.fotoRemota != null) {
+      if (mounted) {
+        setState(() {
+          _caminhoFotoResolvido = detalhes!.versao.fotoRemota;
+        });
+      }
     } else {
       if (mounted) {
         setState(() {
           _caminhoFotoResolvido = null;
         });
       }
+    }
+
+    if (detalhes != null && detalhes.receita.origem == 'themealdb') {
+      _verificarETraduzirEtapasIngles(detalhes);
+    }
+  }
+
+  Future<void> _verificarETraduzirEtapasIngles(ReceitaCompleta detalhes) async {
+    final servicoTraducao = ServicoTraducao();
+    bool temIngles = false;
+    for (final etapa in detalhes.etapas) {
+      if (servicoTraducao.pareceIngles(etapa.instrucao)) {
+        temIngles = true;
+        break;
+      }
+    }
+    if (!temIngles) return;
+
+    final novasEtapas = await Future.wait<Etapa>(
+      detalhes.etapas.map((etapa) async {
+        if (servicoTraducao.pareceIngles(etapa.instrucao)) {
+          final traduzido = await servicoTraducao.textoParaPortugues(etapa.instrucao);
+          return Etapa(
+            idEtapa: etapa.idEtapa,
+            idVersao: etapa.idVersao,
+            ordem: etapa.ordem,
+            instrucao: traduzido,
+          );
+        }
+        return etapa;
+      }),
+    );
+
+    if (mounted) {
+      setState(() {
+        _etapasTraduzidasDinamicas = novasEtapas;
+      });
     }
   }
 
@@ -173,16 +231,41 @@ class _FichaReceitaTelaState extends State<FichaReceitaTela> {
           appBar: AppBar(
             title: Text(detalhes.versao.titulo),
             actions: [
-              IconButton(
-                icon: const Icon(Icons.edit_outlined),
-                tooltip: 'Editar receita',
-                onPressed: _abrirEdicao,
+              ListenableBuilder(
+                listenable: _controllerFavoritos,
+                builder: (context, _) {
+                  final ehFavorito = _controllerFavoritos.isFavorito(widget.idReceita);
+                  return IconButton(
+                    iconSize: 24,
+                    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                    tooltip: ehFavorito ? 'Remover dos favoritos' : 'Favoritar',
+                    icon: Icon(
+                      ehFavorito ? Icons.favorite : Icons.favorite_border,
+                      color: ehFavorito ? CoresApp.orange700 : null,
+                    ),
+                    onPressed: () async {
+                      final sucesso = await _controllerFavoritos.alternarFavorito(widget.idReceita);
+                      if (!sucesso && context.mounted && _controllerFavoritos.erro != null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(_controllerFavoritos.erro!)),
+                        );
+                      }
+                    },
+                  );
+                },
               ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline, color: CoresApp.error),
-                tooltip: 'Excluir receita',
-                onPressed: _confirmarExclusao,
-              ),
+              if (detalhes.receita.origem == 'usuario') ...[
+                IconButton(
+                  icon: const Icon(Icons.edit_outlined),
+                  tooltip: 'Editar receita',
+                  onPressed: _abrirEdicao,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: CoresApp.error),
+                  tooltip: 'Excluir receita',
+                  onPressed: _confirmarExclusao,
+                ),
+              ],
             ],
           ),
           body: SafeArea(
@@ -197,10 +280,27 @@ class _FichaReceitaTelaState extends State<FichaReceitaTela> {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      const SeloEstado(
-                        tipo: TipoSelo.privada,
-                        textoCustomizado: 'Privada',
-                      ),
+                      if (detalhes.receita.origem == 'themealdb')
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: CoresApp.orange100,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: const Text(
+                            'Fonte: TheMealDB',
+                            style: TextStyle(
+                              color: CoresApp.orange800,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        )
+                      else
+                        const SeloEstado(
+                          tipo: TipoSelo.privada,
+                          textoCustomizado: 'Privada',
+                        ),
                       const SeloEstado(
                         tipo: TipoSelo.tenho,
                         textoCustomizado: 'Salvo no aparelho',
@@ -279,14 +379,15 @@ class _FichaReceitaTelaState extends State<FichaReceitaTela> {
                                     ),
                                   ),
                                 ),
-                                Text(
-                                  item.medida,
-                                  style: const TextStyle(
-                                    color: CoresApp.inkSoft,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
+                                if (item.medida.trim().isNotEmpty)
+                                  Text(
+                                    item.medida,
+                                    style: const TextStyle(
+                                      color: CoresApp.inkSoft,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
-                                ),
                               ],
                             ),
                           );
@@ -295,54 +396,111 @@ class _FichaReceitaTelaState extends State<FichaReceitaTela> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  const Text(
-                    'Modo de Preparo',
-                    style: TextStyle(
-                      color: CoresApp.ink,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: detalhes.etapas.map((etapa) {
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                CircleAvatar(
-                                  radius: 12,
-                                  backgroundColor: CoresApp.orange100,
-                                  child: Text(
-                                    '${etapa.ordem}',
-                                    style: const TextStyle(
-                                      color: CoresApp.orange800,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                    ),
+                  Builder(
+                    builder: (context) {
+                      final etapasBase = _etapasTraduzidasDinamicas ?? detalhes.etapas;
+                      final etapasExibicao = (etapasBase.length == 1 &&
+                              (etapasBase.first.instrucao.contains('\n') ||
+                                  etapasBase.first.instrucao.contains('STEP') ||
+                                  etapasBase.first.instrucao.contains('Passo')))
+                          ? QuebradorInstrucoes.dividirEmEtapas(etapasBase.first.instrucao)
+                              .asMap()
+                              .entries
+                              .map((entry) => Etapa(
+                                    idEtapa: 'temp_${entry.key}',
+                                    idVersao: detalhes.versao.idVersao,
+                                    ordem: entry.key + 1,
+                                    instrucao: entry.value,
+                                  ))
+                              .toList()
+                          : etapasBase;
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Modo de Preparo',
+                                style: TextStyle(
+                                  color: CoresApp.ink,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: CoresApp.orange50,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: CoresApp.orange100),
+                                ),
+                                child: Text(
+                                  '${etapasExibicao.length} ${etapasExibicao.length == 1 ? 'etapa' : 'etapas'}',
+                                  style: const TextStyle(
+                                    color: CoresApp.orange800,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12,
                                   ),
                                 ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    etapa.instrucao,
-                                    style: const TextStyle(
-                                      color: CoresApp.ink,
-                                      fontSize: 15,
-                                      height: 1.4,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          ...etapasExibicao.map((etapa) {
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: CoresApp.surface,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: CoresApp.line, width: 1.2),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color(0x06000000),
+                                    blurRadius: 4,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: CoresApp.orange100,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      'Passo ${etapa.ordem}',
+                                      style: const TextStyle(
+                                        color: CoresApp.orange800,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w800,
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Text(
+                                      etapa.instrucao,
+                                      style: const TextStyle(
+                                        color: CoresApp.ink,
+                                        fontSize: 15,
+                                        height: 1.5,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      );
+                    },
                   ),
                   const SizedBox(height: 32),
                   SizedBox(

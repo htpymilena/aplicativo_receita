@@ -9,7 +9,7 @@ import '../entidades/usuario.dart';
 /// Gerenciador do banco de dados SQLite local do aplicativo.
 class BancoDados {
   static const String nomeArquivo = 'app_receitas.db';
-  static const int versaoAtual = 1;
+  static const int versaoAtual = 2;
 
   static final BancoDados instancia = BancoDados._interno();
   BancoDados._interno();
@@ -199,6 +199,16 @@ class BancoDados {
       );
     ''');
 
+    // 11. RECEITA_EXTERNA_USUARIO
+    batch.execute('''
+      CREATE TABLE receita_externa_usuario (
+        id_usuario TEXT NOT NULL REFERENCES usuario(id_usuario) ON DELETE RESTRICT,
+        id_receita TEXT NOT NULL REFERENCES receita(id_receita) ON DELETE RESTRICT,
+        salvo_em TEXT NOT NULL,
+        PRIMARY KEY (id_usuario, id_receita)
+      );
+    ''');
+
     // Triggers para coerência entre conferência/item/versão e preparo/etapa/versão
     batch.execute('''
       CREATE TRIGGER trg_conferencia_versao_check_insert
@@ -265,8 +275,16 @@ class BancoDados {
 
   /// Gancho de migração sem destruição de dados para futuras versões de esquema.
   static Future<void> _aoAtualizar(Database db, int versaoAntiga, int versaoNova) async {
-    // Exemplo para futuras versões:
-    // if (versaoAntiga < 2) { await db.execute('ALTER TABLE ...'); }
+    if (versaoAntiga < 2) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS receita_externa_usuario (
+          id_usuario TEXT NOT NULL REFERENCES usuario(id_usuario) ON DELETE RESTRICT,
+          id_receita TEXT NOT NULL REFERENCES receita(id_receita) ON DELETE RESTRICT,
+          salvo_em TEXT NOT NULL,
+          PRIMARY KEY (id_usuario, id_receita)
+        );
+      ''');
+    }
   }
 
   /// Recupera o usuário local provisório existente ou cria um novo com UUID estável e email nulo.

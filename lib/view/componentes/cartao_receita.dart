@@ -10,6 +10,8 @@ class CartaoReceita extends StatelessWidget {
   final double? mediaEstrelas;
   final int? totalAvaliacoes;
   final VoidCallback? onTap;
+  final bool? ehFavorito;
+  final VoidCallback? onFavoritoTap;
 
   const CartaoReceita({
     super.key,
@@ -19,6 +21,8 @@ class CartaoReceita extends StatelessWidget {
     this.mediaEstrelas,
     this.totalAvaliacoes,
     this.onTap,
+    this.ehFavorito,
+    this.onFavoritoTap,
   });
 
   @override
@@ -100,6 +104,22 @@ class CartaoReceita extends StatelessWidget {
                   ],
                 ),
               ),
+              if (onFavoritoTap != null) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  iconSize: 24,
+                  constraints: const BoxConstraints(
+                    minWidth: 48,
+                    minHeight: 48,
+                  ),
+                  tooltip: (ehFavorito ?? false) ? 'Remover dos favoritos' : 'Favoritar',
+                  icon: Icon(
+                    (ehFavorito ?? false) ? Icons.favorite : Icons.favorite_border,
+                    color: (ehFavorito ?? false) ? CoresApp.orange700 : CoresApp.inkSoft,
+                  ),
+                  onPressed: onFavoritoTap,
+                ),
+              ],
             ],
           ),
         ),

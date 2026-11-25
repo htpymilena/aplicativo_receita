@@ -23,9 +23,17 @@ class ControllerReceitas extends ChangeNotifier {
   List<ReceitaResumo> receitas = [];
   ReceitaCompleta? receitaSelecionada;
 
+  String? _idAutorAtivo;
+
+  void definirUsuario(String id) {
+    _idAutorAtivo = id;
+  }
+
   Future<String> _obterIdAutorAtivo() async {
+    if (_idAutorAtivo != null) return _idAutorAtivo!;
     final usuario = await bancoDados.obterOuCriarUsuarioProvisorio();
-    return usuario.idUsuario;
+    _idAutorAtivo = usuario.idUsuario;
+    return _idAutorAtivo!;
   }
 
   /// Carrega a lista de receitas próprias do usuário ativo.

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../controller/controller_favoritos.dart';
 import '../../controller/controller_historico.dart';
 import '../../controller/controller_preparo.dart';
 import '../../controller/controller_receitas.dart';
@@ -7,6 +8,7 @@ import '../theme/cores.dart';
 import 'checklist_preparo_tela.dart';
 import 'detalhe_preparo_tela.dart';
 import 'etapas_preparo_tela.dart';
+import 'exploracao_themealdb_tela.dart';
 import 'ficha_receita_tela.dart';
 import 'formulario_receita_tela.dart';
 import 'minhas_receitas_tela.dart';
@@ -16,12 +18,14 @@ class InicioTela extends StatefulWidget {
   final ControllerHistorico? controllerHistorico;
   final ControllerPreparo? controllerPreparo;
   final ControllerReceitas? controllerReceitas;
+  final ControllerFavoritos? controllerFavoritos;
 
   const InicioTela({
     super.key,
     this.controllerHistorico,
     this.controllerPreparo,
     this.controllerReceitas,
+    this.controllerFavoritos,
   });
 
   @override
@@ -32,6 +36,7 @@ class _InicioTelaState extends State<InicioTela> {
   late final ControllerHistorico _controllerHistorico;
   late final ControllerPreparo _controllerPreparo;
   late final ControllerReceitas _controllerReceitas;
+  late final ControllerFavoritos _controllerFavoritos;
 
   @override
   void initState() {
@@ -39,12 +44,14 @@ class _InicioTelaState extends State<InicioTela> {
     _controllerHistorico = widget.controllerHistorico ?? ControllerHistorico();
     _controllerPreparo = widget.controllerPreparo ?? ControllerPreparo();
     _controllerReceitas = widget.controllerReceitas ?? ControllerReceitas();
+    _controllerFavoritos = widget.controllerFavoritos ?? ControllerFavoritos();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         if (_controllerHistorico.emAndamento.isEmpty && _controllerHistorico.concluidos.isEmpty) {
           _controllerHistorico.carregarTudo();
         }
         _controllerReceitas.carregarMinhasReceitas();
+        _controllerFavoritos.carregarFavoritos();
       }
     });
   }
@@ -72,7 +79,7 @@ class _InicioTelaState extends State<InicioTela> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([_controllerHistorico, _controllerReceitas]),
+      animation: Listenable.merge([_controllerHistorico, _controllerReceitas, _controllerFavoritos]),
       builder: (context, _) {
         final emAndamento = _controllerHistorico.emAndamento;
         final concluidos = _controllerHistorico.concluidos;
@@ -88,6 +95,7 @@ class _InicioTelaState extends State<InicioTela> {
                 await Future.wait([
                   _controllerHistorico.carregarTudo(),
                   _controllerReceitas.carregarMinhasReceitas(),
+                  _controllerFavoritos.carregarFavoritos(),
                 ]);
               },
               child: SingleChildScrollView(
@@ -125,6 +133,45 @@ class _InicioTelaState extends State<InicioTela> {
                             ),
                           ),
                         ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // Acesso ao catálogo externo TheMealDB
+                    Card(
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        side: const BorderSide(color: CoresApp.line, width: 1),
+                      ),
+                      color: Colors.white,
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        leading: const CircleAvatar(
+                          backgroundColor: CoresApp.orange100,
+                          child: Icon(Icons.travel_explore_rounded, color: CoresApp.orange800),
+                        ),
+                        title: const Text(
+                          'Explorar TheMealDB',
+                          style: TextStyle(fontWeight: FontWeight.w700, color: CoresApp.ink),
+                        ),
+                        subtitle: const Text(
+                          'Descubra receitas mundiais por nome, categoria ou ingrediente',
+                          style: TextStyle(color: CoresApp.inkSoft, fontSize: 13),
+                        ),
+                        trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: CoresApp.orange700),
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ExploracaoTheMealDbTela(
+                                controllerReceitas: _controllerReceitas,
+                                controllerPreparo: _controllerPreparo,
+                                controllerFavoritos: _controllerFavoritos,
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ),
 
@@ -261,11 +308,15 @@ class _InicioTelaState extends State<InicioTela> {
                             onPressed: () async {
                               await Navigator.of(context).push(
                                 MaterialPageRoute(
-                                  builder: (_) => MinhasReceitasTela(controller: _controllerReceitas),
+                                  builder: (_) => MinhasReceitasTela(
+                                    controller: _controllerReceitas,
+                                    controllerFavoritos: _controllerFavoritos,
+                                  ),
                                 ),
                               );
                               _controllerReceitas.carregarMinhasReceitas();
                               _controllerHistorico.carregarTudo();
+                              _controllerFavoritos.carregarFavoritos();
                             },
                             child: const Text(
                               'Ver todas',
@@ -360,17 +411,22 @@ class _InicioTelaState extends State<InicioTela> {
                             titulo: rec.titulo,
                             categoria: rec.categoria,
                             foto: rec.fotoLocal,
+                            ehFavorito: _controllerFavoritos.isFavorito(rec.idReceita),
+                            onFavoritoTap: () => _controllerFavoritos.alternarFavorito(rec.idReceita),
                             onTap: () async {
                               await Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (_) => FichaReceitaTela(
                                     idReceita: rec.idReceita,
                                     controller: _controllerReceitas,
+                                    controllerPreparo: _controllerPreparo,
+                                    controllerFavoritos: _controllerFavoritos,
                                   ),
                                 ),
                               );
                               _controllerReceitas.carregarMinhasReceitas();
                               _controllerHistorico.carregarTudo();
+                              _controllerFavoritos.carregarFavoritos();
                             },
                           );
                         },

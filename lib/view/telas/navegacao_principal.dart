@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../controller/controller_favoritos.dart';
 import '../../controller/controller_historico.dart';
 import '../../controller/controller_preparo.dart';
 import '../../controller/controller_receitas.dart';
@@ -14,6 +15,7 @@ class NavegacaoPrincipal extends StatefulWidget {
   final ControllerHistorico? controllerHistorico;
   final ControllerPreparo? controllerPreparo;
   final ControllerReceitas? controllerReceitas;
+  final ControllerFavoritos? controllerFavoritos;
 
   const NavegacaoPrincipal({
     super.key,
@@ -21,6 +23,7 @@ class NavegacaoPrincipal extends StatefulWidget {
     this.controllerHistorico,
     this.controllerPreparo,
     this.controllerReceitas,
+    this.controllerFavoritos,
   });
 
   @override
@@ -32,6 +35,7 @@ class _NavegacaoPrincipalState extends State<NavegacaoPrincipal> {
   late final ControllerHistorico _controllerHistorico;
   late final ControllerPreparo _controllerPreparo;
   late final ControllerReceitas _controllerReceitas;
+  late final ControllerFavoritos _controllerFavoritos;
 
   @override
   void initState() {
@@ -40,6 +44,7 @@ class _NavegacaoPrincipalState extends State<NavegacaoPrincipal> {
     _controllerHistorico = widget.controllerHistorico ?? ControllerHistorico();
     _controllerPreparo = widget.controllerPreparo ?? ControllerPreparo();
     _controllerReceitas = widget.controllerReceitas ?? ControllerReceitas();
+    _controllerFavoritos = widget.controllerFavoritos ?? ControllerFavoritos();
   }
 
   void _onItemTapped(int index) {
@@ -47,8 +52,16 @@ class _NavegacaoPrincipalState extends State<NavegacaoPrincipal> {
       _indiceSelecionado = index;
     });
 
-    // Atualiza automaticamente Início ou Histórico ao selecionar a aba
-    if (index == 0 || index == 3) {
+    // Atualiza automaticamente Início, Favoritos ou Histórico ao selecionar a aba
+    if (index == 0) {
+      _controllerHistorico.carregarTudo();
+      _controllerReceitas.carregarMinhasReceitas();
+      _controllerFavoritos.carregarFavoritos();
+    }
+    if (index == 2) {
+      _controllerFavoritos.carregarFavoritos();
+    }
+    if (index == 3) {
       _controllerHistorico.carregarTudo();
       _controllerReceitas.carregarMinhasReceitas();
     }
@@ -64,9 +77,14 @@ class _NavegacaoPrincipalState extends State<NavegacaoPrincipal> {
         controllerHistorico: _controllerHistorico,
         controllerPreparo: _controllerPreparo,
         controllerReceitas: _controllerReceitas,
+        controllerFavoritos: _controllerFavoritos,
       ),
       const ComunidadeTela(),
-      const FavoritosTela(),
+      FavoritosTela(
+        controller: _controllerFavoritos,
+        controllerReceitas: _controllerReceitas,
+        controllerPreparo: _controllerPreparo,
+      ),
       HistoricoTela(
         controller: _controllerHistorico,
       ),

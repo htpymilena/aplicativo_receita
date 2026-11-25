@@ -265,7 +265,7 @@ void main() {
 
       // 5. Ler e conferir dados e versão
       final versionResult = await db.rawQuery('PRAGMA user_version;');
-      expect(versionResult.first['user_version'], equals(1));
+      expect(versionResult.first['user_version'], equals(BancoDados.versaoAtual));
 
       final receitasLidas = await db.query(
         'receita',
